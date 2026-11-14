@@ -18,7 +18,7 @@ def native(path: str) -> str:
 
 
 def display(path: str) -> str:
-    if path.startswith('\\\\?\\UNC\\'):
+    if path.casefold().startswith('\\\\?\\unc\\'):
         return '\\\\' + path[8:]
     if path.startswith('\\\\?\\'):
         return path[4:]
@@ -42,6 +42,8 @@ class Result:
     errors: int = 0
     error_paths: list[str] = field(default_factory=list)
     cancelled: bool = False
+    root: str = ''
+    threshold: int = 260
 
 
 def scan(root: str, threshold: int, exclusions: set[str], stop: threading.Event,
@@ -55,7 +57,7 @@ def scan(root: str, threshold: int, exclusions: set[str], stop: threading.Event,
         raise NotADirectoryError(root)
     if stat.S_ISLNK(info.st_mode) or getattr(info, 'st_file_attributes', 0) & 0x400:
         raise ValueError('Выберите обычную папку, а не ссылку или junction.')
-    result = Result()
+    result = Result(root=root, threshold=threshold)
     excluded = {name.casefold() for name in exclusions}
     stack = [root]
 
@@ -67,6 +69,11 @@ def scan(root: str, threshold: int, exclusions: set[str], stop: threading.Event,
     while stack and not stop.is_set():
         current = stack.pop()
         try:
+            # Recheck queued directories: they may have been replaced since enumeration.
+            meta = os.lstat(native(current))
+            if stat.S_ISLNK(meta.st_mode) or getattr(meta, 'st_file_attributes', 0) & 0x400:
+                result.skipped += 1
+                continue
             with os.scandir(native(current)) as children:
                 for item in children:
                     if stop.is_set():
